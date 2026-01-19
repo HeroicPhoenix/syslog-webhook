@@ -1,0 +1,12 @@
+services:
+  syslog-webhook:
+    image: crpi-v2fmzydhnzmlpzjc.cn-shanghai.personal.cr.aliyuncs.com/machenkai/syslog-webhook:latest
+    container_name: syslog-webhook
+    ports:
+      - "12080:12080"
+    volumes:
+      - /volume1/docker/syslog-webhook/config/config.json:/config/config.json:ro
+      - /volume1/docker/syslog-webhook/output:/output
+      - /volume1/docker/syslog-webhook/logs:/logs
+      - /volume1:/volume1:ro
+    restart: always

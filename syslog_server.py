@@ -26,7 +26,7 @@ from syslog_rfc5424_parser import SyslogMessage
 # 配置加载
 # =========================
 
-CONFIG_PATH = Path("./config.json")
+CONFIG_PATH = Path("/config/config.json")
 
 
 def load_config():

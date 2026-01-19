@@ -1,5 +1,8 @@
 FROM crpi-v2fmzydhnzmlpzjc.cn-shanghai.personal.cr.aliyuncs.com/machenkai/python:3.10-slim
 
+# =========================
+# 环境变量
+# =========================
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
@@ -35,12 +38,13 @@ COPY app /app
 # =========================
 # 约定挂载点
 # =========================
-# /config : config.json
-# /logs   : 容器日志（如后续加 file handler）
-VOLUME ["/config", "/logs"]
+# /config : config.json（只读挂载）
+# /logs   : 预留日志目录
+# /output : 预留输出目录
+VOLUME ["/config", "/logs", "/output"]
 
 # =========================
-# 暴露 syslog 端口
+# 暴露 Syslog TCP 端口
 # =========================
 EXPOSE 12080
 

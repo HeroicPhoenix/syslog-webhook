@@ -1,2 +1,2 @@
-syslog-rfc5424-parser==0.2.1
+syslog-rfc5424-parser
 requests>=2.31.0

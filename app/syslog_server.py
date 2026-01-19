@@ -2,15 +2,17 @@
 # -*- coding: utf-8 -*-
 
 """
-RFC5424 Syslog TCP Server (Configurable)
-=======================================
+RFC5424 / RFC6587 Syslog TCP Server (Configurable)
+=================================================
 
 功能：
-- TCP 监听 RFC5424 syslog（端口来自 JSON 配置）
-- 从 JSON 文件读取多条匹配规则
+- TCP 监听 Syslog（RFC5424）
+- 兼容 RFC6587 Octet Counting（Synology / rsyslog 常见）
+- 从 JSON 文件读取多条正则匹配规则
 - 每条规则可指定不同 webhook
 - 命中规则即触发 webhook
 - 不落库，仅内存处理
+- 支持 test_mode：打印每一条收到的日志，方便排错
 - 适合 Docker / NAS 生产部署
 """
 
@@ -30,25 +32,34 @@ CONFIG_PATH = Path("/config/config.json")
 
 
 def load_config():
+    """
+    加载 JSON 配置文件，并预编译正则
+    """
     if not CONFIG_PATH.exists():
         raise RuntimeError(f"配置文件不存在：{CONFIG_PATH}")
 
     with CONFIG_PATH.open("r", encoding="utf-8") as f:
         cfg = json.load(f)
 
-    # 预编译正则，提高性能
+    # 预编译规则中的正则，提高运行时性能
     for rule in cfg.get("rules", []):
-        rule["compiled_regex"] = re.compile(rule["regex"], re.IGNORECASE)
+        rule["compiled_regex"] = re.compile(
+            rule["regex"],
+            re.IGNORECASE
+        )
 
     return cfg
 
 
 config = load_config()
 
-SERVER_HOST = config["server"].get("host", "0.0.0.0")
-SERVER_PORT = config["server"].get("port", 12080)
+SERVER_HOST = config.get("server", {}).get("host", "0.0.0.0")
+SERVER_PORT = config.get("server", {}).get("port", 12080)
 
 RULES = config.get("rules", [])
+
+# ⭐ 是否开启测试模式（打印所有原始日志）
+TEST_MODE = config.get("test_mode", False)
 
 # =========================
 # 日志配置
@@ -62,12 +73,35 @@ logging.basicConfig(
 logger = logging.getLogger("syslog-server")
 
 # =========================
+# 工具函数
+# =========================
+
+def strip_octet_counting(msg: str) -> str:
+    """
+    去除 RFC6587 TCP Syslog 的 Octet Counting 前缀
+
+    示例：
+        '139 <14>1 2026-01-19T18:05:51+08:00 ...'
+        -> '<14>1 2026-01-19T18:05:51+08:00 ...'
+    """
+    if not msg:
+        return msg
+
+    # 以数字开头，且第一个空格前都是数字，判定为 Octet Counting
+    if msg[0].isdigit():
+        parts = msg.split(" ", 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            return parts[1]
+
+    return msg
+
+# =========================
 # TCP Handler
 # =========================
 
 class SyslogTCPHandler(socketserver.StreamRequestHandler):
     """
-    RFC5424 TCP Syslog Handler
+    Syslog TCP Handler
     """
 
     def handle(self):
@@ -75,12 +109,28 @@ class SyslogTCPHandler(socketserver.StreamRequestHandler):
         logger.info(f"连接建立：{client_ip}:{client_port}")
 
         for raw_line in self.rfile:
+            raw_message = None
             try:
-                message = raw_line.decode("utf-8", errors="ignore").strip()
-                if not message:
+                raw_message = raw_line.decode(
+                    "utf-8",
+                    errors="ignore"
+                ).strip()
+
+                if not raw_message:
                     continue
 
+                # =========================
+                # 测试模式：打印原始日志
+                # =========================
+                if TEST_MODE:
+                    logger.info(f"[TEST_MODE] 原始日志：{raw_message}")
+
+                # 去除 RFC6587 Octet Counting 前缀
+                message = strip_octet_counting(raw_message)
+
+                # =========================
                 # RFC5424 解析
+                # =========================
                 syslog = SyslogMessage.parse(message)
                 event = syslog.as_dict()
 
@@ -95,7 +145,11 @@ class SyslogTCPHandler(socketserver.StreamRequestHandler):
                 self.match_rules(event, msg_content)
 
             except Exception as e:
-                logger.exception(f"日志处理异常：{e}")
+                # 解析失败不影响服务继续运行
+                logger.error("日志处理异常（已忽略，服务继续运行）")
+                if raw_message:
+                    logger.error(f"异常日志原文：{raw_message}")
+                logger.exception(e)
 
         logger.info(f"连接关闭：{client_ip}:{client_port}")
 
@@ -115,9 +169,15 @@ class SyslogTCPHandler(socketserver.StreamRequestHandler):
         发送 webhook
         """
         payload = {
-            "title": rule["webhook"].get("title", "Syslog 告警"),
+            "title": rule.get("webhook", {}).get(
+                "title",
+                "Syslog 告警"
+            ),
             "msg": event.get("msg", ""),
-            "url": rule["webhook"].get("url_field", "")
+            "url": rule.get("webhook", {}).get(
+                "url_field",
+                ""
+            )
         }
 
         try:
@@ -141,9 +201,12 @@ class SyslogTCPHandler(socketserver.StreamRequestHandler):
 # TCP Server
 # =========================
 
-class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+class ThreadedTCPServer(
+    socketserver.ThreadingMixIn,
+    socketserver.TCPServer
+):
     allow_reuse_address = True
-
+    daemon_threads = True
 
 # =========================
 # 主入口
@@ -151,9 +214,11 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 def main():
     logger.info(
-        f"Syslog RFC5424 TCP Server 启动，监听 {SERVER_HOST}:{SERVER_PORT}"
+        f"Syslog TCP Server 启动，监听 {SERVER_HOST}:{SERVER_PORT}"
     )
     logger.info(f"已加载规则数：{len(RULES)}")
+    logger.info(f"测试模式：{'开启' if TEST_MODE else '关闭'}")
+    logger.info(f"配置文件路径：{CONFIG_PATH}")
 
     with ThreadedTCPServer(
         (SERVER_HOST, SERVER_PORT),

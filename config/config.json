@@ -4,6 +4,11 @@
     "port": 12080
   },
   "test_mode": true,
+  "test_webhook": {
+    "url": "http://192.168.3.99:12082/notify",
+    "title": "Syslog 测试消息",
+    "url_field": "https://example.com"
+  },
   "rules": [
     {
       "name": "link_state_change",
